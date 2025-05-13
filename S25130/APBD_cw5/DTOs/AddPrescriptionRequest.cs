@@ -1,4 +1,4 @@
-namespace APBD_cw5.DTO;
+namespace APBD_cw5.DTOs;
 
 public class AddPrescriptionRequest {
     public PatientDto Patient { get; set; } = null!;

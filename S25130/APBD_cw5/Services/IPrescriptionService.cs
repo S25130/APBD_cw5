@@ -1,6 +1,5 @@
 namespace APBD_cw5.Services;
 
-public class IPrescriptionService
-{
-    
+public interface IPrescriptionService {
+    Task AddPrescriptionAsync(AddPrescriptionRequest request);
 }

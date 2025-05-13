@@ -1,3 +1,8 @@
+using APBD_cw5.Data;
+using APBD_cw5.DTOs;
+using APBD_cw5.Models;
+using Microsoft.EntityFrameworkCore;
+
 namespace APBD_cw5.Services;
 
 public class PrescriptionService : IPrescriptionService {

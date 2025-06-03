@@ -1,0 +1,198 @@
+// Models/Client.cs
+public class Client
+{
+    public int Id { get; set; }
+    public string FirstName { get; set; }
+    public string LastName { get; set; }
+    public ICollection<Order> Orders { get; set; }
+}
+
+// Models/Order.cs
+public class Order
+{
+    public int Id { get; set; }
+    public DateTime AcceptedAt { get; set; }
+    public DateTime? FulfilledAt { get; set; }
+    public string Comments { get; set; }
+    public int ClientId { get; set; }
+    public Client Client { get; set; }
+    public int EmployeeId { get; set; }
+    public ICollection<OrderPastry> OrderPastries { get; set; }
+}
+
+// Models/Pastry.cs
+public class Pastry
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public decimal Price { get; set; }
+    public ICollection<OrderPastry> OrderPastries { get; set; }
+}
+
+// Models/OrderPastry.cs
+public class OrderPastry
+{
+    public int OrderId { get; set; }
+    public Order Order { get; set; }
+
+    public int PastryId { get; set; }
+    public Pastry Pastry { get; set; }
+
+    public int Amount { get; set; }
+}
+
+public class ApplicationDbContext : DbContext
+{
+    public DbSet<Client> Clients { get; set; }
+    public DbSet<Order> Orders { get; set; }
+    public DbSet<Pastry> Pastries { get; set; }
+    public DbSet<OrderPastry> OrderPastries { get; set; }
+
+    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<OrderPastry>()
+            .HasKey(op => new { op.OrderId, op.PastryId });
+    }
+}
+
+// DTOs/OrderResponseDto.cs
+public class OrderResponseDto
+{
+    public int Id { get; set; }
+    public DateTime AcceptedAt { get; set; }
+    public DateTime? FulfilledAt { get; set; }
+    public string Comments { get; set; }
+    public List<PastryInOrderDto> Pastries { get; set; }
+}
+
+public class PastryInOrderDto
+{
+    public string Name { get; set; }
+    public decimal Price { get; set; }
+    public int Amount { get; set; }
+}
+
+// DTOs/CreateOrderRequestDto.cs
+public class CreateOrderRequestDto
+{
+    public int EmployeeId { get; set; }
+    public DateTime AcceptedAt { get; set; }
+    public string Comments { get; set; }
+    public List<CreatePastryInOrderDto> Pastries { get; set; }
+}
+
+public class CreatePastryInOrderDto
+{
+    public string Name { get; set; }
+    public int Amount { get; set; }
+    public string? Comments { get; set; }
+}
+
+public interface IOrderService
+{
+    Task<List<OrderResponseDto>> GetOrdersAsync(string? clientLastName);
+    Task<bool> CreateOrderAsync(int clientId, CreateOrderRequestDto request);
+}
+
+public class OrderService : IOrderService
+{
+    private readonly ApplicationDbContext _context;
+
+    public OrderService(ApplicationDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<List<OrderResponseDto>> GetOrdersAsync(string? clientLastName)
+    {
+        var query = _context.Orders
+            .Include(o => o.OrderPastries).ThenInclude(op => op.Pastry)
+            .Include(o => o.Client)
+            .AsQueryable();
+
+        if (!string.IsNullOrEmpty(clientLastName))
+            query = query.Where(o => o.Client.LastName == clientLastName);
+
+        return await query.Select(o => new OrderResponseDto
+        {
+            Id = o.Id,
+            AcceptedAt = o.AcceptedAt,
+            FulfilledAt = o.FulfilledAt,
+            Comments = o.Comments,
+            Pastries = o.OrderPastries.Select(op => new PastryInOrderDto
+            {
+                Name = op.Pastry.Name,
+                Price = op.Pastry.Price,
+                Amount = op.Amount
+            }).ToList()
+        }).ToListAsync();
+    }
+
+    public async Task<bool> CreateOrderAsync(int clientId, CreateOrderRequestDto request)
+    {
+        using var transaction = await _context.Database.BeginTransactionAsync();
+
+        var client = await _context.Clients.FindAsync(clientId);
+        if (client == null) return false;
+
+        var pastriesInDb = await _context.Pastries
+            .Where(p => request.Pastries.Select(x => x.Name).Contains(p.Name))
+            .ToListAsync();
+
+        if (pastriesInDb.Count != request.Pastries.Count)
+            return false;
+
+        var order = new Order
+        {
+            ClientId = clientId,
+            EmployeeId = request.EmployeeId,
+            AcceptedAt = request.AcceptedAt,
+            Comments = request.Comments,
+            OrderPastries = request.Pastries.Select(p => new OrderPastry
+            {
+                PastryId = pastriesInDb.First(db => db.Name == p.Name).Id,
+                Amount = p.Amount
+            }).ToList()
+        };
+
+        await _context.Orders.AddAsync(order);
+        await _context.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return true;
+    }
+}
+
+[ApiController]
+[Route("api")]
+public class OrdersController : ControllerBase
+{
+    private readonly IOrderService _orderService;
+
+    public OrdersController(IOrderService orderService)
+    {
+        _orderService = orderService;
+    }
+
+    [HttpGet("orders")]
+    public async Task<IActionResult> GetOrders([FromQuery] string? clientLastName)
+    {
+        var result = await _orderService.GetOrdersAsync(clientLastName);
+        return Ok(result);
+    }
+
+    [HttpPost("clients/{clientId}/orders")]
+    public async Task<IActionResult> CreateOrder(int clientId, [FromBody] CreateOrderRequestDto request)
+    {
+        var success = await _orderService.CreateOrderAsync(clientId, request);
+        if (!success) return BadRequest("Invalid client or pastry.");
+        return Created("", null);
+    }
+}
+
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseInMemoryDatabase("KolokwiumDb")); // lub realna baza
+
+builder.Services.AddScoped<IOrderService, OrderService>();
